@@ -1,0 +1,32 @@
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Dependencies
+vendor/
+node_modules/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+
+# Logs and temporary files
+*.log
+*.tmp
+cache/
+tmp/
+
+# Database backups
+*.sql
+*.sql.gz
+*.dump
+
+# Local configuration
+config/autoload/local.php
