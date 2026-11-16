@@ -18,7 +18,7 @@
 All applications use one shared business database.
 
 Database engine:
-- MySQL 8.0.
+- MySQL 8.x.
 
 ## Schema Ownership
 - Shared business migrations belong to api/database/migrations.

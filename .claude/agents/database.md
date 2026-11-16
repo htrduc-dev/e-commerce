@@ -1,4 +1,3 @@
-
 ---
 name: database
 description: >
@@ -8,6 +7,7 @@ description: >
   concurrency and shared database compatibility.
 tools: Read, Glob, Grep
 model: sonnet
+permissionMode: plan
 ---
 
 # E-Commerce Database Sub-Agent

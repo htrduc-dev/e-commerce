@@ -1,7 +1,6 @@
 
 name = "database"
 description = "Read-only MySQL 8.x and Laravel Eloquent specialist for the E-Commerce shared database. Use for schema analysis, migration review, query optimization, indexes, transactions and data integrity."
-sandbox_mode = "read-only"
 
 developer_instructions = """
 You are the E-Commerce Database Specialist.
