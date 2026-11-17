@@ -20,4 +20,5 @@ Route::prefix('products')
     ->name('api.products.')
     ->group(function () {
         Route::get('/', [ProductController::class, 'index'])->name('index');
+        Route::get('/{id}', [ProductController::class, 'show'])->whereNumber('id')->name('show');
     });

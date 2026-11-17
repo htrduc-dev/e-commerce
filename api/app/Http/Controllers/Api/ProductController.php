@@ -10,6 +10,21 @@ use Illuminate\Http\Request;
 
 class ProductController extends Controller
 {
+    public function show(Request $request, string $id): JsonResponse
+    {
+        $product = Product::query()
+            ->select(['id', 'name', 'slug'])
+            // Fetch the unsigned BIGINT as text before PDO can convert numeric values.
+            ->selectRaw('CAST(price AS CHAR) AS price')
+            ->where('status', 'published')
+            ->whereKey($id)
+            ->firstOrFail();
+
+        return response()->json([
+            'data' => (new ProductResource($product))->resolve($request),
+        ]);
+    }
+
     public function index(Request $request): JsonResponse
     {
         $validated = $request->validate([
