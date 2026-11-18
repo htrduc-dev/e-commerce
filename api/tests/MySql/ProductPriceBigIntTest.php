@@ -4,74 +4,163 @@ namespace Tests\MySql;
 
 use App\Models\Product;
 use App\Models\Seller;
-use Illuminate\Foundation\Application;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
-use Tests\TestCase;
+use Tests\Support\MySqlSafety;
 
 #[Group('mysql')]
-class ProductPriceBigIntTest extends TestCase
+class ProductPriceBigIntTest extends MySqlTestCase
 {
-    protected function setUp(): void
+    #[DataProvider('unsignedBigintPrices')]
+    public function test_listing_preserves_exact_price_strings(string $price): void
     {
-        // Skip before parent setup can bootstrap Laravel or touch a database.
-        if (getenv('ECOMMERCE_MYSQL_PRICE_TEST_OPT_IN') !== '1') {
-            $this->markTestSkipped('Isolated ephemeral MySQL harness is not provisioned; see docs/testing/mysql-product-price.md.');
-        }
-
-        $application = $this->createApplicationFromVerifiedEphemeralHarness();
-
-        if ($application === null) {
-            $this->markTestSkipped('Verified ephemeral MySQL harness adapter is not implemented; refusing Laravel bootstrap and database access.');
-        }
-
-        $this->app = $application;
-
-        parent::setUp();
-    }
-
-    protected function createApplicationFromVerifiedEphemeralHarness(): ?Application
-    {
-        // Extension point: implement only after reviewing the isolation checks
-        // and lifecycle in docs/testing/mysql-product-price.md. Never fall back
-        // to the ordinary application bootstrap or shared database configuration.
-        return null;
+        $product = $this->createProduct(['price' => $price]);
+        $this->assertStoredPrice($product, $price);
+        $response = $this->getJson('/api/products')->assertOk();
+        $this->assertSame([$this->publicFields($product, $price)], $response->json('data'));
     }
 
     #[DataProvider('unsignedBigintPrices')]
-    public function test_unsigned_bigint_prices_are_exact_json_strings(string $price): void
+    public function test_details_preserve_exact_price_strings(string $price): void
     {
-        $seller = Seller::query()->create([
-            'type' => 'store',
-            'name' => 'Unsigned price test seller',
-            'email' => 'unsigned-price-'.bin2hex(random_bytes(8)).'@example.test',
-            'password' => 'test-password',
-            'status' => 'suspended',
-        ]);
-
-        $product = Product::query()->create([
-            'seller_id' => $seller->id,
-            'name' => 'Unsigned price test product',
-            'slug' => 'unsigned-price-'.$price,
-            'price' => $price,
-            'status' => 'published',
-        ]);
-
-        $this->getJson('/api/products')
-            ->assertOk()
-            ->assertJsonPath('data', [[
-                'id' => $product->id,
-                'name' => $product->name,
-                'slug' => $product->slug,
-                'price' => $price,
-            ]]);
+        $product = $this->createProduct(['price' => $price]);
+        $this->assertStoredPrice($product, $price);
+        $response = $this->getJson('/api/products/'.$product->id)->assertOk();
+        $this->assertSame(['data' => $this->publicFields($product, $price)], $response->json());
     }
 
     public static function unsignedBigintPrices(): array
     {
         return [
-            'signed bigint maximum plus one' => ['9223372036854775808'],
-            'unsigned bigint maximum' => ['18446744073709551615'],
+            'zero' => ['0'],
+            'above JavaScript safe integer' => ['9007199254740993'],
+            'signed maximum' => ['9223372036854775807'],
+            'signed maximum plus one' => ['9223372036854775808'],
+            'unsigned maximum' => ['18446744073709551615'],
         ];
+    }
+
+    public function test_guest_listing_only_exposes_published_public_fields(): void
+    {
+        $published = $this->createProduct(['description' => 'Private description', 'stock' => 42]);
+        $this->createProduct(['status' => 'draft']);
+        $this->createProduct(['status' => 'archived']);
+        $response = $this->getJson('/api/products?status=draft')->assertOk();
+        $this->assertSame([$this->publicFields($published)], $response->json('data'));
+        $response->assertJsonPath('pagination.total', 1);
+    }
+
+    public function test_guest_details_only_expose_public_fields(): void
+    {
+        $product = $this->createProduct(['description' => 'Private description', 'stock' => 42]);
+        $response = $this->getJson('/api/products/'.$product->id)->assertOk();
+        $this->assertSame(['data' => $this->publicFields($product)], $response->json());
+    }
+
+    #[DataProvider('unpublishedStatuses')]
+    public function test_unpublished_details_are_not_found(string $status): void
+    {
+        $product = $this->createProduct(['status' => $status]);
+        $this->getJson('/api/products/'.$product->id.'?status=published')
+            ->assertNotFound()->assertJsonMissingPath('data');
+    }
+
+    public static function unpublishedStatuses(): array
+    {
+        return [['draft'], ['archived']];
+    }
+
+    public function test_missing_details_are_not_found(): void
+    {
+        $this->getJson('/api/products/999999')->assertNotFound();
+    }
+
+    public function test_non_numeric_details_are_not_found(): void
+    {
+        $this->getJson('/api/products/not-an-id')->assertNotFound();
+    }
+
+    public function test_missing_details_are_json_without_accept_header(): void
+    {
+        $this->get('/api/products/999999')->assertNotFound()
+            ->assertHeader('Content-Type', 'application/json');
+    }
+
+    public function test_listing_pagination_and_sorting_preserve_unsigned_maximum(): void
+    {
+        // ID order deliberately conflicts with creation-time order.
+        $newest = $this->createProduct(['created_at' => '2026-01-03 00:00:00']);
+        $newer = $this->createProduct(['created_at' => '2026-01-02 00:00:00']);
+        $tied = $this->createProduct(['created_at' => '2026-01-02 00:00:00']);
+        $maximum = $this->createProduct(['price' => '18446744073709551615', 'created_at' => '2026-01-01 00:00:00']);
+        $this->createProduct(['status' => 'draft']);
+        $first = $this->getJson('/api/products?per_page=2')->assertOk();
+        $this->assertSame([$newest->id, $tied->id], array_column($first->json('data'), 'id'));
+        $first->assertJsonPath('pagination', ['current_page' => 1, 'per_page' => 2, 'total' => 4, 'last_page' => 2, 'from' => 1, 'to' => 2]);
+        $second = $this->getJson('/api/products?per_page=2&page=2')->assertOk();
+        $this->assertSame([$this->publicFields($newer), $this->publicFields($maximum, '18446744073709551615')], $second->json('data'));
+        $second->assertJsonPath('pagination', ['current_page' => 2, 'per_page' => 2, 'total' => 4, 'last_page' => 2, 'from' => 3, 'to' => 4]);
+    }
+
+    public function test_listing_without_published_products_is_empty(): void
+    {
+        $this->createProduct(['status' => 'draft']);
+        $this->createProduct(['status' => 'archived']);
+        $this->getJson('/api/products')->assertOk()->assertExactJson([
+            'data' => [],
+            'pagination' => ['current_page' => 1, 'per_page' => 15, 'total' => 0, 'last_page' => 1, 'from' => null, 'to' => null],
+        ]);
+    }
+
+    #[DataProvider('invalidPagination')]
+    public function test_invalid_pagination_is_rejected(string $query, string $field): void
+    {
+        $this->getJson('/api/products?'.$query)->assertUnprocessable()->assertJsonValidationErrors($field);
+    }
+
+    public static function invalidPagination(): array
+    {
+        return [['per_page=0', 'per_page'], ['per_page=101', 'per_page'], ['page=0', 'page']];
+    }
+
+    private function assertStoredPrice(Product $product, string $price): void
+    {
+        $stored = $this->app['db']->connection('mysql')->table('products')
+            ->where('id', $product->id)->selectRaw('CAST(price AS CHAR) AS exact_price')->first();
+        $this->assertSame($price, $stored->exact_price);
+    }
+
+    private function publicFields(Product $product, string $price = '150000'): array
+    {
+        return ['id' => $product->id, 'name' => $product->name, 'slug' => $product->slug, 'price' => $price];
+    }
+
+    private function createProduct(array $attributes = []): Product
+    {
+        $seller = Seller::query()->firstOrCreate(['email' => 'mysql-products@example.test'], [
+            'type' => 'store', 'name' => 'MySQL test seller', 'password' => 'test-password', 'status' => 'suspended',
+        ]);
+
+        $createdAt = $attributes['created_at'] ?? '2026-01-01 00:00:00';
+        $updatedAt = $attributes['updated_at'] ?? $createdAt;
+        unset($attributes['created_at'], $attributes['updated_at']);
+        $product = new Product(array_merge([
+            'seller_id' => $seller->id,
+            'category_id' => null,
+            'name' => 'MySQL test product',
+            'slug' => 'mysql-product-'.bin2hex(random_bytes(8)),
+            'description' => null,
+            'price' => '150000',
+            'stock' => 0,
+            'status' => 'published',
+        ], $attributes));
+        $product->created_at = $createdAt;
+        $product->updated_at = $updatedAt;
+        $product->save();
+        $stored = MySqlSafety::connection($this->app)->table('products')->where('id', $product->id)->first(['created_at', 'updated_at']);
+        $this->assertSame($createdAt, $stored->created_at);
+        $this->assertSame($updatedAt, $stored->updated_at);
+
+        return $product;
     }
 }

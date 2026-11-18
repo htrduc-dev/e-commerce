@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/Support/mysql-suite-bootstrap.php"
+         colors="true"
+         failOnSkipped="true"
+         failOnRisky="true"
+         failOnWarning="true">
+    <testsuites>
+        <testsuite name="MySql">
+            <!-- Bootstrap token inventory validates candidates before PHPUnit includes them. -->
+            <directory suffix="Test.php">tests/MySql</directory>
+        </testsuite>
+    </testsuites>
+    <extensions>
+        <bootstrap class="Tests\Support\MySqlSuiteExtension"/>
+    </extensions>
+    <source>
+        <include>
+            <directory>app</directory>
+        </include>
+    </source>
+    <!-- Do not overwrite unsafe inherited values: the harness must reject them. -->
+    <php>
+        <env name="APP_ENV" value="testing"/>
+        <env name="DB_CONNECTION" value="mysql"/>
+        <env name="DB_HOST" value="127.0.0.1"/>
+        <env name="DB_PORT" value="3307"/>
+        <env name="DB_DATABASE" value="ecommerce_test"/>
+        <env name="DB_URL" value=""/>
+        <env name="DB_SOCKET" value=""/>
+        <env name="APP_MAINTENANCE_DRIVER" value="file"/>
+        <env name="BCRYPT_ROUNDS" value="4"/>
+    </php>
+</phpunit>
