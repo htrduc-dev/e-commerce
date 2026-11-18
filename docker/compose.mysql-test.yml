@@ -1,0 +1,45 @@
+
+name: ecommerce-integration-test
+
+services:
+  mysql-test:
+    image: mysql:8.4
+    container_name: ecommerce-mysql-test
+    restart: "no"
+
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_DATABASE: ecommerce_test
+      MYSQL_USER: ecommerce_tester
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_tester_password
+
+    secrets:
+      - mysql_root_password
+      - mysql_tester_password
+
+    ports:
+      - "127.0.0.1:3307:3306"
+
+    volumes:
+      - mysql_test_data:/var/lib/mysql
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          test -s "$$MYSQL_PASSWORD_FILE" &&
+          MYSQL_PWD="$$(cat "$$MYSQL_PASSWORD_FILE")"
+          mysqladmin ping -h 127.0.0.1 -u "$$MYSQL_USER" --silent
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+volumes:
+  mysql_test_data:
+
+secrets:
+  mysql_root_password:
+    file: ${ECOMMERCE_MYSQL_COMPOSE_ROOT_SECRET_FILE:?Required local root secret file}
+  mysql_tester_password:
+    file: ${ECOMMERCE_MYSQL_COMPOSE_TESTER_SECRET_FILE:?Required local tester secret file}
