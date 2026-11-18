@@ -1,0 +1,120 @@
+name: API CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - codex/product-apis-workflow
+
+permissions:
+  contents: read
+
+jobs:
+  api-checks:
+    name: PHP, Pint and SQLite
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: api
+
+    env:
+      APP_ENV: testing
+      APP_DEBUG: "false"
+      APP_MAINTENANCE_DRIVER: file
+      DB_CONNECTION: sqlite
+      DB_DATABASE: ":memory:"
+      DB_URL: ""
+      DATABASE_URL: ""
+      DB_USERNAME: ""
+      DB_PASSWORD: ""
+      DB_SOCKET: ""
+      CACHE_STORE: array
+      SESSION_DRIVER: array
+      QUEUE_CONNECTION: sync
+      MAIL_MAILER: array
+      BROADCAST_CONNECTION: "null"
+      BCRYPT_ROUNDS: "4"
+      ECOMMERCE_MYSQL_ALLOW_DB: ""
+      ECOMMERCE_MYSQL_PREFLIGHT_OPT_IN: ""
+      ECOMMERCE_MYSQL_MIGRATION_OPT_IN: ""
+      ECOMMERCE_MYSQL_PRICE_TEST_OPT_IN: ""
+
+    steps:
+      # Verified against the official upstream v4 ref.
+      - name: Check out pull request
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      # Verified peeled commit of the official upstream v2 tag.
+      - name: Set up PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962
+        with:
+          php-version: "8.5"
+          extensions: ctype, dom, fileinfo, iconv, mbstring, pdo_sqlite, sqlite3, pdo_mysql, simplexml, tokenizer, xml, xmlwriter
+          tools: composer:v2
+          coverage: none
+
+      - name: Install locked dependencies without scripts or plugins
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress --no-scripts --no-plugins
+          composer check-platform-reqs
+
+      - name: Prepare ephemeral application configuration
+        run: |
+          test ! -e .env
+          test ! -e bootstrap/cache/config.php
+          php -r 'echo "APP_KEY=base64:".base64_encode(random_bytes(32)).PHP_EOL;' >> "$GITHUB_ENV"
+
+      - name: Discover Laravel packages
+        run: php artisan package:discover --ansi
+
+      - name: Verify SQLite isolation and default suite
+        run: |
+          php -r '
+            require "vendor/autoload.php";
+            $app = require "bootstrap/app.php";
+            $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+            $config = $app["config"];
+            if (!$app->environment("testing")
+                || $config->get("database.default") !== "sqlite"
+                || $config->get("database.connections.sqlite.driver") !== "sqlite"
+                || $config->get("database.connections.sqlite.database") !== ":memory:"
+                || !empty($config->get("database.connections.sqlite.url"))) {
+                fwrite(STDERR, "Unsafe SQLite configuration\n");
+                exit(1);
+            }
+            $xml = simplexml_load_file("phpunit.xml");
+            if ($xml === false) {
+                exit(1);
+            }
+            $directories = array_map(
+                static fn ($directory) => (string) $directory,
+                $xml->xpath("/phpunit/testsuites/testsuite/directory")
+            );
+            sort($directories);
+            if ($directories !== ["tests/Feature", "tests/Unit"]
+                || $xml->xpath("/phpunit/testsuites/testsuite/file")
+                || (string) $xml["bootstrap"] !== "vendor/autoload.php") {
+                fwrite(STDERR, "Unexpected default PHPUnit discovery\n");
+                exit(1);
+            }
+          '
+
+      - name: Check PHP syntax
+        run: |
+          find app bootstrap config database routes tests \
+            -type f -name "*.php" -print0 |
+            xargs -0 -n 1 php -l
+
+      - name: Check Laravel Pint
+        run: ./vendor/bin/pint --test
+
+      - name: Run default SQLite PHPUnit suite
+        run: |
+          ./vendor/bin/phpunit -c phpunit.xml \
+            --fail-on-skipped --fail-on-risky --fail-on-warning \
+            --do-not-cache-result
