@@ -25,8 +25,16 @@ class ProductShowTest extends TestCase
         $this->assertSame('', DB::selectOne('PRAGMA database_list')->file);
 
         // Create only an in-memory fixture; never invoke application migrations.
+        Schema::create('sellers', function (Blueprint $table): void {
+            $table->id();
+            $table->string('status');
+        });
+
         Schema::create('products', function (Blueprint $table): void {
             $table->id();
+            // Deliberately omit the FK only in this SQLite fixture to test
+            // defensive orphan filtering. The real MySQL schema forbids orphans.
+            $table->unsignedBigInteger('seller_id');
             $table->string('name');
             $table->string('slug')->unique();
             $table->unsignedBigInteger('price');
@@ -140,10 +148,64 @@ class ProductShowTest extends TestCase
             ->assertJsonValidationErrors('per_page');
     }
 
-    private function createProduct(array $attributes = []): Product
+    #[DataProvider('visibilityCases')]
+    public function test_details_require_a_published_product_and_an_active_seller(string $productStatus, string $sellerStatus, bool $visible): void
     {
+        $product = $this->createProduct(['status' => $productStatus], $sellerStatus);
+        $response = $this->getJson('/api/products/'.$product->id.'?status='.$productStatus.'&seller_status='.$sellerStatus);
+
+        if (! $visible) {
+            $response->assertNotFound()->assertJsonMissingPath('data');
+
+            return;
+        }
+
+        $response->assertOk()->assertExactJson(['data' => [
+            'id' => $product->id, 'name' => $product->name,
+            'slug' => $product->slug, 'price' => '150000',
+        ]]);
+    }
+
+    public function test_orphan_seller_product_is_hidden_from_both_public_endpoints(): void
+    {
+        // This invalid relationship exists only in the unconstrained :memory:
+        // fixture; never disable foreign keys on the real MySQL test database.
+        $visible = $this->createProduct();
+        $orphan = $this->createProduct(['seller_id' => 999999]);
+        $this->assertFalse(DB::table('sellers')->where('id', 999999)->exists());
+
+        $this->getJson('/api/products')->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $visible->id)
+            ->assertJsonPath('pagination.total', 1);
+        $this->getJson('/api/products/'.$orphan->id)
+            ->assertNotFound()->assertJsonMissingPath('data');
+    }
+
+    public static function visibilityCases(): array
+    {
+        $cases = [];
+
+        foreach (['published', 'draft', 'archived'] as $productStatus) {
+            foreach (['active', 'pending', 'suspended'] as $sellerStatus) {
+                $cases[$productStatus.' / '.$sellerStatus] = [
+                    $productStatus, $sellerStatus,
+                    $productStatus === 'published' && $sellerStatus === 'active',
+                ];
+            }
+        }
+
+        return $cases;
+    }
+
+    private function createProduct(array $attributes = [], string $sellerStatus = 'active'): Product
+    {
+        $sellerId = DB::table('sellers')->where('status', $sellerStatus)->value('id')
+            ?? DB::table('sellers')->insertGetId(['status' => $sellerStatus]);
+
         $product = new Product;
         $product->forceFill(array_merge([
+            'seller_id' => $sellerId,
             'name' => 'Test product',
             'slug' => 'product-'.Product::query()->count(),
             'price' => '150000',

@@ -1,7 +1,15 @@
 # GET /api/products
 
-API public, không cần token. Chỉ trả sản phẩm có `status=published`, sắp xếp
-`created_at DESC, id DESC`. Không lọc theo trạng thái seller hoặc tồn kho.
+API public, không cần token. Chỉ trả sản phẩm khi đồng thời:
+
+- product.status = published;
+- seller tồn tại và seller.status = active.
+
+Sản phẩm của seller pending/suspended hoặc không có seller hợp lệ bị ẩn.
+Draft/archived bị ẩn bất kể seller status. Không lọc thêm theo tồn kho, verification
+hoặc loại seller. Query parameters không thể bỏ qua các điều kiện visibility này.
+Giữ thứ tự `created_at DESC, id DESC`. Pagination chỉ tính các sản phẩm visible,
+bao gồm total/last_page/from/to; sản phẩm hidden không chiếm chỗ trên trang.
 
 Query parameters:
 
@@ -54,6 +62,33 @@ Composite index `(status, created_at, id)` được hoãn sang công việc hi�
 riêng; chưa thay đổi schema/index trong phạm vi API này. Offset lớn và truy vấn
 count vẫn có thể tốn chi phí với bảng lớn.
 
-Harness MySQL chưa được triển khai; các giá trị `price > PHP_INT_MAX` chưa được
-xác minh runtime MySQL. Xem [hướng dẫn harness](../testing/mysql-product-price.md)
-về scaffold kiểm thử unsigned BIGINT và điều kiện cách ly cần có trước khi chạy.
+Harness MySQL đã có và các price boundaries, gồm BIGINT UNSIGNED maximum
+18446744073709551615, đã được xác minh bằng Gate C trước REV-003. Xem
+[hướng dẫn harness](../testing/mysql-product-price.md). Bộ test visibility REV-003
+phải được chạy lại sau approval riêng; kết quả Gate C cũ không thay thế việc xác minh
+policy mới. MySQL tests chỉ dùng tester SELECT/INSERT, transaction/rollback và đầy đủ
+safety guards; không tự chuẩn bị schema, migrate hoặc cleanup.
+
+## GET /api/products/{id}
+
+API public, cùng visibility policy với Listing. Chỉ published product có seller
+active mới trả HTTP 200 JSON:
+
+```json
+{
+  "data": {
+    "id": 42,
+    "name": "Sản phẩm mẫu",
+    "slug": "san-pham-mau",
+    "price": "150000"
+  }
+}
+```
+
+Chỉ có bốn public fields nêu trên; price luôn là JSON string với cùng quy tắc Listing.
+Product thiếu, draft/archived, seller pending/suspended hoặc không tồn tại đều trả
+HTTP 404 JSON, không trả product data. ID không phải số cũng trả 404.
+
+Schema MySQL thật bắt buộc seller_id và có foreign key tới sellers.id với
+ON DELETE CASCADE, nên không thể tạo orphan hợp lệ. Defensive orphan coverage chỉ
+dùng SQLite :memory: fixture không khai báo FK; không tắt foreign key MySQL.

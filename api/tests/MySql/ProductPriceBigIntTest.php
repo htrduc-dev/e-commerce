@@ -94,6 +94,9 @@ class ProductPriceBigIntTest extends MySqlTestCase
         $tied = $this->createProduct(['created_at' => '2026-01-02 00:00:00']);
         $maximum = $this->createProduct(['price' => '18446744073709551615', 'created_at' => '2026-01-01 00:00:00']);
         $this->createProduct(['status' => 'draft']);
+        $this->createProduct(['status' => 'archived']);
+        $this->createProduct(['created_at' => '2026-01-04 00:00:00'], 'pending');
+        $this->createProduct(['created_at' => '2026-01-05 00:00:00'], 'suspended');
         $first = $this->getJson('/api/products?per_page=2')->assertOk();
         $this->assertSame([$newest->id, $tied->id], array_column($first->json('data'), 'id'));
         $first->assertJsonPath('pagination', ['current_page' => 1, 'per_page' => 2, 'total' => 4, 'last_page' => 2, 'from' => 1, 'to' => 2]);
@@ -123,6 +126,44 @@ class ProductPriceBigIntTest extends MySqlTestCase
         return [['per_page=0', 'per_page'], ['per_page=101', 'per_page'], ['page=0', 'page']];
     }
 
+    #[DataProvider('visibilityCases')]
+    public function test_both_endpoints_require_a_published_product_and_an_active_seller(string $productStatus, string $sellerStatus, bool $visible): void
+    {
+        $price = '18446744073709551615';
+        $product = $this->createProduct(['status' => $productStatus, 'price' => $price], $sellerStatus);
+        $this->assertStoredPrice($product, $price);
+
+        $listing = $this->getJson('/api/products?status='.$productStatus.'&seller_status='.$sellerStatus)->assertOk();
+        $this->assertSame($visible ? [$this->publicFields($product, $price)] : [], $listing->json('data'));
+        $listing->assertJsonPath('pagination', [
+            'current_page' => 1, 'per_page' => 15, 'total' => $visible ? 1 : 0,
+            'last_page' => 1, 'from' => $visible ? 1 : null, 'to' => $visible ? 1 : null,
+        ]);
+        $details = $this->getJson('/api/products/'.$product->id.'?status='.$productStatus.'&seller_status='.$sellerStatus);
+
+        if ($visible) {
+            $details->assertOk()->assertExactJson(['data' => $this->publicFields($product, $price)]);
+        } else {
+            $details->assertNotFound()->assertJsonMissingPath('data');
+        }
+    }
+
+    public static function visibilityCases(): array
+    {
+        $cases = [];
+
+        foreach (['published', 'draft', 'archived'] as $productStatus) {
+            foreach (['active', 'pending', 'suspended'] as $sellerStatus) {
+                $cases[$productStatus.' / '.$sellerStatus] = [
+                    $productStatus, $sellerStatus,
+                    $productStatus === 'published' && $sellerStatus === 'active',
+                ];
+            }
+        }
+
+        return $cases;
+    }
+
     private function assertStoredPrice(Product $product, string $price): void
     {
         $stored = $this->app['db']->connection('mysql')->table('products')
@@ -135,10 +176,10 @@ class ProductPriceBigIntTest extends MySqlTestCase
         return ['id' => $product->id, 'name' => $product->name, 'slug' => $product->slug, 'price' => $price];
     }
 
-    private function createProduct(array $attributes = []): Product
+    private function createProduct(array $attributes = [], string $sellerStatus = 'active'): Product
     {
-        $seller = Seller::query()->firstOrCreate(['email' => 'mysql-products@example.test'], [
-            'type' => 'store', 'name' => 'MySQL test seller', 'password' => 'test-password', 'status' => 'suspended',
+        $seller = Seller::query()->firstOrCreate(['email' => 'mysql-products-'.$sellerStatus.'@example.test'], [
+            'type' => 'store', 'name' => 'MySQL test seller', 'password' => 'test-password', 'status' => $sellerStatus,
         ]);
 
         $createdAt = $attributes['created_at'] ?? '2026-01-01 00:00:00';
