@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\ProductResource;
 use App\Models\Product;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -17,6 +18,7 @@ class ProductController extends Controller
             // Fetch the unsigned BIGINT as text before PDO can convert numeric values.
             ->selectRaw('CAST(price AS CHAR) AS price')
             ->where('status', 'published')
+            ->whereHas('seller', fn (Builder $query) => $query->where('sellers.status', 'active'))
             ->whereKey($id)
             ->firstOrFail();
 
@@ -37,6 +39,7 @@ class ProductController extends Controller
             // Fetch the unsigned BIGINT as text before PDO can convert numeric values.
             ->selectRaw('CAST(price AS CHAR) AS price')
             ->where('status', 'published')
+            ->whereHas('seller', fn (Builder $query) => $query->where('sellers.status', 'active'))
             ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->paginate((int) ($validated['per_page'] ?? 15), ['*'], 'page', (int) ($validated['page'] ?? 1));

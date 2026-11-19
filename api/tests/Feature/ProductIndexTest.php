@@ -214,13 +214,79 @@ class ProductIndexTest extends TestCase
             ]);
     }
 
-    private function createProduct(array $attributes = []): Product
+    #[DataProvider('visibilityCases')]
+    public function test_listing_requires_a_published_product_and_an_active_seller(string $productStatus, string $sellerStatus, bool $visible): void
     {
-        $seller = Seller::query()->firstOrCreate(['email' => 'products-test@example.test'], [
+        $product = $this->createProduct(['status' => $productStatus], $sellerStatus);
+
+        $response = $this->getJson('/api/products?status='.$productStatus.'&seller_status='.$sellerStatus)->assertOk();
+
+        $this->assertSame($visible ? [[
+            'id' => $product->id,
+            'name' => $product->name,
+            'slug' => $product->slug,
+            'price' => '150000',
+        ]] : [], $response->json('data'));
+        $response->assertJsonPath('pagination', [
+            'current_page' => 1, 'per_page' => 15, 'total' => $visible ? 1 : 0,
+            'last_page' => 1, 'from' => $visible ? 1 : null, 'to' => $visible ? 1 : null,
+        ]);
+    }
+
+    public function test_mixed_seller_statuses_do_not_affect_visible_sorting_or_pagination(): void
+    {
+        $oldest = $this->createProduct(['created_at' => '2026-01-01 00:00:00']);
+        $newest = $this->createProduct(['created_at' => '2026-01-03 00:00:00']);
+        $middle = $this->createProduct(['created_at' => '2026-01-02 00:00:00']);
+        $tied = $this->createProduct(['created_at' => '2026-01-02 00:00:00']);
+        $this->createProduct(['created_at' => '2026-01-04 00:00:00'], 'pending');
+        $this->createProduct(['created_at' => '2026-01-05 00:00:00'], 'suspended');
+        $this->createProduct(['status' => 'draft', 'created_at' => '2026-01-06 00:00:00']);
+        $this->createProduct(['status' => 'archived', 'created_at' => '2026-01-07 00:00:00']);
+
+        $first = $this->getJson('/api/products?per_page=2')->assertOk();
+        $second = $this->getJson('/api/products?per_page=2&page=2')->assertOk();
+        $this->assertSame([$newest->id, $tied->id], array_column($first->json('data'), 'id'));
+        $this->assertSame([$middle->id, $oldest->id], array_column($second->json('data'), 'id'));
+        $first->assertJsonPath('pagination', [
+            'current_page' => 1, 'per_page' => 2, 'total' => 4,
+            'last_page' => 2, 'from' => 1, 'to' => 2,
+        ]);
+        $second->assertJsonPath('pagination', [
+            'current_page' => 2, 'per_page' => 2, 'total' => 4,
+            'last_page' => 2, 'from' => 3, 'to' => 4,
+        ]);
+        $this->getJson('/api/products?per_page=2&page=3')->assertOk()
+            ->assertJsonPath('data', [])
+            ->assertJsonPath('pagination', [
+                'current_page' => 3, 'per_page' => 2, 'total' => 4,
+                'last_page' => 2, 'from' => null, 'to' => null,
+            ]);
+    }
+
+    public static function visibilityCases(): array
+    {
+        $cases = [];
+
+        foreach (['published', 'draft', 'archived'] as $productStatus) {
+            foreach (['active', 'pending', 'suspended'] as $sellerStatus) {
+                $cases[$productStatus.' / '.$sellerStatus] = [
+                    $productStatus, $sellerStatus,
+                    $productStatus === 'published' && $sellerStatus === 'active',
+                ];
+            }
+        }
+
+        return $cases;
+    }
+
+    private function createProduct(array $attributes = [], string $sellerStatus = 'active'): Product
+    {
+        $seller = Seller::query()->firstOrCreate(['email' => 'products-test-'.$sellerStatus.'@example.test'], [
             'type' => 'store',
             'name' => 'Test seller',
             'password' => 'test-password',
-            'status' => 'suspended',
+            'status' => $sellerStatus,
         ]);
 
         $product = new Product;
