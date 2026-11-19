@@ -17,6 +17,7 @@ Route::prefix('auth')
     });
 
 Route::prefix('products')
+    ->middleware('throttle:public-products')
     ->name('api.products.')
     ->group(function () {
         Route::get('/', [ProductController::class, 'index'])->name('index');
